@@ -1,0 +1,160 @@
+// Copyright (c) 2017-2018 Xiamen Yaji Software Co., Ltd.
+CCEffect %{
+  techniques:
+  - name: opaque
+    passes:
+    - vert: phong-vs
+      frag: phong-fs:frag
+      properties: &props
+        mainTexture:          { value: grey, target: albedoMap, editor: { displayName: AlbedoMap } }
+        detailTexuture:          { value: grey, target: detailMap, editor: { displayName: DetailMap } }
+        tiling:   { value: [0.25, 0.125] }
+      }%
+
+
+CCProgram shared-ubos %{
+  uniform Constants {
+    vec4 albedo;
+    vec4 pbrParams;
+    vec2 tiling;
+  };
+}%
+
+
+CCProgram phong-vs %{
+  precision mediump float;
+  #include <legacy/decode-base>
+  #include <builtin/uniforms/cc-global>
+  #include <legacy/local-batch>
+  #include <legacy/input-standard>
+  #include <shared-ubos>
+  #include <legacy/fog-vs>
+
+  #if USE_INSTANCING // when instancing is enabled
+  in vec2 a_offset;
+  out vec2 offset;
+  in float a_dark;
+  out float dark;
+  #endif
+
+  #if USE_VERTEX_COLOR
+    in vec4 a_color;
+    out vec4 v_color;
+  #endif
+
+  out vec3 v_normal;
+  out vec2 v_uv;
+  out vec3 v_position;
+
+  #if USE_NORMAL_MAP
+    out vec3 v_tangent;
+    out vec3 v_bitangent;
+  #endif
+
+  #if HAS_SECOND_UV 
+    in vec2 a_texCoord1;
+  #endif
+
+
+  void main () {
+    StandardVertInput In;
+    CCVertInput(In);
+
+    mat4 matWorld, matWorldIT;
+    CCGetWorldMatrixFull(matWorld, matWorldIT);
+
+    vec4 pos = matWorld * In.position;
+
+    v_position = pos.xyz;
+
+    v_normal = normalize((matWorldIT * vec4(In.normal, 0.0)).xyz);
+
+    #if USE_NORMAL_MAP
+      v_tangent = normalize((matWorld * vec4(In.tangent.xyz, 0.0)).xyz);
+      v_bitangent = cross(v_normal, v_tangent) * In.tangent.w; // note the cross order
+    #endif
+
+    v_uv = a_texCoord;
+
+    #if USE_INSTANCING // when instancing is enabled
+    dark = a_dark;
+    offset = a_offset;
+    #endif
+
+    #if USE_VERTEX_COLOR
+      v_color = a_color;
+    #endif
+
+    CC_TRANSFER_FOG(pos);
+
+    gl_Position = cc_matProj * (cc_matView * matWorld) * In.position;
+  }
+}%
+
+CCProgram phong-fs %{
+  precision mediump float;
+  #include <builtin/uniforms/cc-global>
+  #include <shared-ubos>
+  #include <legacy/fog-fs>
+  #include <legacy/output-standard>
+
+  in vec2 v_uv;
+  in vec3 v_normal;
+
+  #if USE_INSTANCING // when instancing is enabled
+  in vec2 offset;
+  in float dark;
+  #endif
+
+  #if USE_VERTEX_COLOR
+    in vec4 v_color;
+  #endif
+
+  uniform sampler2D albedoMap;
+  uniform sampler2D detailMap;
+
+
+
+  vec4 frag () {
+    vec2 uv=v_uv;
+    uv.x *=tiling.x;
+    
+    #if USE_INSTANCING // when instancing is enabled
+    uv.x +=offset.x;
+    #endif
+
+    vec4 o= texture(albedoMap, uv);
+    o.rgb = SRGBToLinear(o.rgb);
+
+    vec2 uv1=v_uv;
+    uv1.x *=tiling.y;
+    
+    #if USE_INSTANCING // when instancing is enabled
+    uv1.x +=offset.y;
+    #endif
+
+    vec4 detail = texture(detailMap, uv1);
+    detail.rgb = SRGBToLinear(detail.rgb);
+
+    o.rgb = o.rgb *(1.-detail.a) + detail.rgb*detail.a;
+
+    #if USE_VERTEX_COLOR
+      o *= v_color;
+    #endif
+
+    vec3 N =  normalize(v_normal);
+    vec3 L = normalize(cc_mainLitDir.xyz * -1.0);
+
+    vec3 diffuse = cc_mainLitColor.rgb * max(0.0, dot(N,L));
+
+    o.rgb *= (cc_ambientGround.rgb +cc_ambientSky.rgb* diffuse)* cc_mainLitColor.w;
+
+    #if USE_INSTANCING // when instancing is enabled
+    o *=(1.-dark);
+    #endif
+
+    CC_APPLY_FOG(o);
+
+    return CCFragOutput(o);
+  }
+}%

@@ -1,0 +1,95 @@
+// Effect Syntax Guide: https://docs.cocos.com/creator/manual/zh/shader/index.html
+
+CCEffect %{
+  techniques:
+  - name: opaque
+    passes:
+    - vert: unlit-vs:vert
+      frag: unlit-fs:frag
+      properties: &props
+        mainTexture:    { value: white }
+        tilingOffset:      { value: [1, 1, 1, 1]}
+        mainColor:      { value: [1, 1, 1, 1], editor: { type: color } }
+        graSpeed: {value: [0.5], editor: {  slide: true, range: [0, 1.0], step: 0.01  }}
+  - name: transparent
+    passes:
+    - vert: unlit-vs:vert
+      frag: unlit-fs:frag
+      blendState:
+        targets:
+        - blend: true
+          blendSrc: src_alpha
+          blendDst: one_minus_src_alpha
+          blendSrcAlpha: src_alpha
+          blendDstAlpha: one_minus_src_alpha
+      properties: *props
+}%
+
+CCProgram unlit-vs %{
+  precision highp float;
+  #include <legacy/input>
+  #include <builtin/uniforms/cc-global>
+  #include <legacy/decode-base>
+  #include <legacy/local-batch>
+  #include <legacy/input>
+  #include <legacy/fog-vs>
+
+
+  out vec2 v_uv;
+  uniform TexCoords {
+    vec4 tilingOffset;
+  };
+
+  vec4 vert () {
+    vec4 position;
+    CCVertInput(position);
+
+    mat4 matWorld;
+    CCGetWorldMatrix(matWorld);
+
+    
+    v_uv = a_texCoord * tilingOffset.xy + tilingOffset.zw;
+    #if SAMPLE_FROM_RT
+    CC_HANDLE_RT_SAMPLE_FLIP(v_uv);
+    #endif
+
+
+    CC_TRANSFER_FOG(matWorld * position);
+    return cc_matProj * (cc_matView * matWorld) * position;
+  }
+}%
+
+
+
+CCProgram unlit-fs %{
+  precision highp float;
+  #include <legacy/output>
+  #include <legacy/fog-fs>
+
+  in vec2 v_uv;
+
+  uniform sampler2D mainTexture;
+
+  uniform Constant {
+    vec4 mainColor;
+    float graSpeed;
+  };
+
+
+  vec4 frag () {
+    vec4 col = mainColor;  
+  
+    #if USE_TEXTURE
+    col *= texture(mainTexture, v_uv);
+    #endif
+
+    #if USE_GRADIENT
+    col.rgb *= vec3(0.5+0.5*cos(cc_time.x*graSpeed+v_uv.xyx+vec3(0,2,4)));
+    #endif
+
+    CC_APPLY_FOG(col);
+
+    return CCFragOutput(col);
+  }
+
+}%
